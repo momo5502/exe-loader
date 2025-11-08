@@ -35,6 +35,7 @@ dependencies = [
 name = "testicles"
 version = "0.1.0"
 dependencies = [
+ "tls_lib",
  "windows",
 ]
 
