@@ -43,7 +43,7 @@ pub struct ImageTlsDirectory {
 
 unsafe impl Sync for ImageTlsDirectory {}
 
-const TLS_BUFFER_SIZE: usize = 256;
+const TLS_BUFFER_SIZE: usize = 256 * 0x1000;
 
 #[unsafe(link_section = ".tls$BBB")]
 #[unsafe(no_mangle)]

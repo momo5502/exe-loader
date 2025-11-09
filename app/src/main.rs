@@ -1,6 +1,11 @@
-use windows::Win32::System::Diagnostics::Debug::IMAGE_DIRECTORY_ENTRY_IMPORT;
+use windows::Win32::System::Diagnostics::Debug::{
+    IMAGE_DATA_DIRECTORY, IMAGE_DIRECTORY_ENTRY, IMAGE_DIRECTORY_ENTRY_IMPORT,
+    IMAGE_DIRECTORY_ENTRY_TLS,
+};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA, LoadLibraryW};
-use windows::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
+use windows::Win32::System::Memory::{
+    PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, VirtualProtect,
+};
 use windows::core::{PCSTR, PCWSTR};
 
 use windows::Win32::System::SystemServices::{
@@ -9,22 +14,71 @@ use windows::Win32::System::SystemServices::{
 
 #[cfg(target_pointer_width = "64")]
 mod pe_types {
-    use windows::Win32::System::Diagnostics::Debug::{IMAGE_NT_HEADERS64, IMAGE_OPTIONAL_HEADER64};
+    use windows::Win32::System::{
+        Diagnostics::Debug::{IMAGE_NT_HEADERS64, IMAGE_OPTIONAL_HEADER64},
+        SystemServices::IMAGE_TLS_DIRECTORY64,
+    };
 
     pub type ImageNtHeaders = IMAGE_NT_HEADERS64;
     pub type ImageOptionalHeader = IMAGE_OPTIONAL_HEADER64;
+    pub type ImageTlsDirectory = IMAGE_TLS_DIRECTORY64;
 
     pub const IMAGE_ORDINAL_FLAG: usize = 0x8000000000000000;
+
+    fn read_gs_qword(offset: u32) -> u64 {
+        let value: u64;
+        unsafe {
+            core::arch::asm!(
+                "mov {}, gs:[{:e}]",
+                out(reg) value,
+                in(reg) offset,
+                options(nostack, preserves_flags)
+            );
+        }
+
+        return value;
+    }
+
+    pub fn get_tls_vector() -> *const *mut u8 {
+        return read_gs_qword(0x58) as *const *mut u8;
+    }
 }
 
 #[cfg(target_pointer_width = "32")]
 mod pe_types {
-    use windows::Win32::System::Diagnostics::Debug::{IMAGE_NT_HEADERS32, IMAGE_OPTIONAL_HEADER32};
+    use windows::Win32::System::{
+        Diagnostics::Debug::{IMAGE_NT_HEADERS32, IMAGE_OPTIONAL_HEADER32},
+        SystemServices::IMAGE_TLS_DIRECTORY32,
+    };
 
     pub type ImageNtHeaders = IMAGE_NT_HEADERS32;
     pub type ImageOptionalHeader = IMAGE_OPTIONAL_HEADER32;
+    pub type ImageTlsDirectory = IMAGE_TLS_DIRECTORY32;
 
     pub const IMAGE_ORDINAL_FLAG: usize = 0x80000000;
+
+    fn read_fs_dword(offset: u32) -> u32 {
+        let value: u32;
+        unsafe {
+            core::arch::asm!(
+                "mov {}, fs:[{:e}]",
+                out(reg) value,
+                in(reg) offset,
+                options(nostack, preserves_flags)
+            );
+        }
+
+        return value;
+    }
+
+    pub fn get_tls_vector() -> *const *mut u8 {
+        return read_fs_dword(0x2C) as *const *mut u8;
+    }
+}
+
+fn get_tls_data(tls_index: u32) -> *mut u8 {
+    let tls_vector = pe_types::get_tls_vector();
+    return unsafe { *tls_vector.add(tls_index as usize) };
 }
 
 fn image_snap_by_ordinal(ordinal: usize) -> bool {
@@ -102,6 +156,113 @@ trait PEFile {
         let entry_point: fn() = unsafe { std::mem::transmute(pointer.unwrap()) };
         return Some(entry_point);
     }
+
+    fn get_directory_entry(&self, entry: IMAGE_DIRECTORY_ENTRY) -> Option<&IMAGE_DATA_DIRECTORY> {
+        let optional_header = self.get_optional_header();
+        return Some(&optional_header?.DataDirectory[entry.0 as usize]);
+    }
+
+    fn get_tls_dir(&self) -> Option<&pe_types::ImageTlsDirectory> {
+        let entry = self.get_directory_entry(IMAGE_DIRECTORY_ENTRY_TLS);
+
+        if entry?.VirtualAddress == 0 || entry?.Size == 0 {
+            return None;
+        }
+
+        let tls_dir: Option<*const pe_types::ImageTlsDirectory> =
+            self.rva_to_ptr(entry?.VirtualAddress);
+        if tls_dir.is_none() {
+            return None;
+        }
+
+        return Some(unsafe { &*tls_dir.unwrap() });
+    }
+
+    fn call_tls_callbacks(&self, attach: bool) {
+        let base_address = self.get_base_address();
+        let tls_dir = self.get_tls_dir();
+
+        if base_address.is_none() || tls_dir.is_none() {
+            return;
+        }
+
+        let reason = if attach { 2 } else { 3 };
+
+        let base = base_address.unwrap();
+        let callbacks = tls_dir.unwrap().AddressOfCallBacks as *const usize;
+
+        if callbacks == core::ptr::null() {
+            return;
+        }
+
+        let mut index = 0;
+        loop {
+            let current_index = index;
+            index += 1;
+
+            let callback = unsafe { *callbacks.add(current_index) };
+            if callback == 0 {
+                break;
+            }
+
+            let tls_callback: fn(base: *const u8, reason: u8, reserved: usize) =
+                unsafe { std::mem::transmute(callback) };
+
+            tls_callback(base, reason, 0);
+        }
+    }
+}
+
+pub struct ScopedProtection {
+    protected: bool,
+    size: usize,
+    address: *const core::ffi::c_void,
+    old_protection: PAGE_PROTECTION_FLAGS,
+}
+
+impl ScopedProtection {
+    unsafe fn new<T>(address: *const T, size: usize, protection: PAGE_PROTECTION_FLAGS) -> Self {
+        let mut scope = Self {
+            protected: false,
+            size,
+            address: address as *const core::ffi::c_void,
+            old_protection: PAGE_EXECUTE_READWRITE,
+        };
+
+        let res = unsafe {
+            VirtualProtect(
+                scope.address,
+                scope.size,
+                protection,
+                &mut scope.old_protection,
+            )
+        };
+        scope.protected = res.is_ok();
+
+        return scope;
+    }
+}
+
+impl Drop for ScopedProtection {
+    fn drop(&mut self) {
+        if !self.protected {
+            return;
+        }
+
+        self.protected = false;
+        let mut old_protect = PAGE_EXECUTE_READWRITE;
+
+        let res = unsafe {
+            VirtualProtect(
+                self.address,
+                self.size,
+                self.old_protection,
+                &mut old_protect,
+            )
+        };
+
+        res.expect("Reprotection must succeed");
+    }
 }
 
 impl PEFile for windows::Win32::Foundation::HMODULE {
@@ -167,34 +328,87 @@ fn load_imports_for_library<T: PEFile>(
 
         let function_ptr = address.unwrap() as *const u8;
 
-        let mut old_protect = PAGE_EXECUTE_READWRITE;
         unsafe {
-            let res = VirtualProtect(
-                address_table_entry_ptr as *const core::ffi::c_void,
-                8,
+            let _s = ScopedProtection::new(
+                address_table_entry_ptr,
+                std::mem::size_of::<usize>(),
                 PAGE_EXECUTE_READWRITE,
-                &mut old_protect,
             );
-
-            if res.is_err() {
-                return false;
-            }
+            *(address_table_entry_ptr as *mut *const u8) = function_ptr
         };
+    }
 
-        unsafe { *(address_table_entry_ptr as *mut *const u8) = function_ptr };
+    return true;
+}
 
-        unsafe {
-            let res = VirtualProtect(
-                address_table_entry_ptr as *const core::ffi::c_void,
-                8,
-                old_protect,
-                &mut old_protect,
-            );
+fn load_tls_dll() -> Option<windows::Win32::Foundation::HMODULE> {
+    // TODO: Fix
+    return load_library("C:\\Users\\mauri\\Desktop\\testicles\\target\\release\\tls_lib.dll");
+}
 
-            if res.is_err() {
-                return false;
-            }
-        };
+fn get_tls_size(tls_dir: &pe_types::ImageTlsDirectory) -> usize {
+    return (tls_dir.EndAddressOfRawData - tls_dir.StartAddressOfRawData) as usize;
+}
+
+fn load_tls<T: PEFile>(pe: &T) -> bool {
+    let tls_dir = pe.get_tls_dir();
+    if tls_dir.is_none() {
+        return true;
+    }
+
+    let tls_dll = load_tls_dll();
+    if tls_dll.is_none() {
+        return false;
+    }
+
+    let dll = tls_dll.unwrap();
+    let dll_tls_dir = dll.get_tls_dir();
+    if dll_tls_dir.is_none() {
+        return false;
+    }
+
+    let main_tls_dir = tls_dir.unwrap();
+    let target_tls_dir = dll_tls_dir.unwrap();
+
+    let main_dir_size = get_tls_size(&main_tls_dir);
+    let target_dir_size = get_tls_size(&target_tls_dir);
+
+    // Not enough space, throw error?
+    if main_dir_size > target_dir_size {
+        return false;
+    }
+
+    if main_tls_dir.AddressOfIndex == 0 {
+        return true;
+    }
+
+    let tls_index;
+    let main_index_ptr = main_tls_dir.AddressOfIndex as *mut u32;
+    let target_index_ptr = target_tls_dir.AddressOfIndex as *const u32;
+
+    unsafe {
+        let _s = ScopedProtection::new(
+            main_index_ptr,
+            std::mem::size_of::<u32>(),
+            PAGE_EXECUTE_READWRITE,
+        );
+        tls_index = *target_index_ptr;
+        *main_index_ptr = tls_index;
+    }
+
+    let main_tls_data = main_tls_dir.StartAddressOfRawData as *const u8;
+    let target_tls_data = target_tls_dir.StartAddressOfRawData as *mut u8;
+
+    if main_tls_dir.StartAddressOfRawData == 0 {
+        return true;
+    }
+
+    let current_thread_data = get_tls_data(tls_index);
+
+    unsafe {
+        let _s = ScopedProtection::new(target_tls_data, main_dir_size, PAGE_EXECUTE_READWRITE);
+        std::ptr::copy(main_tls_data, target_tls_data, main_dir_size);
+        std::ptr::copy(main_tls_data, current_thread_data, main_dir_size);
     }
 
     return true;
@@ -202,17 +416,14 @@ fn load_imports_for_library<T: PEFile>(
 
 fn load_imports<T: PEFile>(pe: &T) -> bool {
     let base_address = pe.get_base_address();
-    let optional_header = pe.get_optional_header();
+    let import_directory = pe.get_directory_entry(IMAGE_DIRECTORY_ENTRY_IMPORT);
 
-    if base_address.is_none() || optional_header.is_none() {
+    if base_address.is_none() || import_directory.is_none() {
         return false;
     }
 
-    let import_directory =
-        optional_header.unwrap().DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT.0 as usize];
-
     let descriptor_ptr: Option<*const IMAGE_IMPORT_DESCRIPTOR> =
-        pe.rva_to_ptr(import_directory.VirtualAddress);
+        pe.rva_to_ptr(import_directory.unwrap().VirtualAddress);
 
     if descriptor_ptr.is_none() {
         return false;
@@ -270,8 +481,7 @@ unsafe fn load_executable_as_library(lib: &str) -> Option<Executable> {
         return None;
     }
 
-    let loaded = load_imports(&pe_file);
-    if !loaded {
+    if !load_imports(&pe_file) || !load_tls(&pe_file) {
         return None;
     }
 
@@ -288,7 +498,17 @@ fn main() {
         )
     };
 
-    if exe.is_some() {
-        (exe.unwrap().entry_point)();
-    }
+    let bin = exe.expect("bruh");
+
+    println!("Spawning thread...");
+
+    let computation = std::thread::spawn(|| {
+        println!("Hello from thread!");
+    });
+
+    let _ = computation.join();
+
+    bin.handle.call_tls_callbacks(true);
+
+    (bin.entry_point)();
 }
