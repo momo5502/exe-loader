@@ -103,7 +103,7 @@ fn load_imports_for_library<T: PEFile>(
 
 fn load_tls_dll() -> Option<windows::Win32::Foundation::HMODULE> {
     // TODO: Fix
-    return load_library("C:\\Users\\mauri\\Desktop\\testicles\\target\\release\\tls_lib.dll");
+    return load_library("C:\\Users\\mauri\\Desktop\\exe-loader\\target\\release\\tls_lib.dll");
 }
 
 fn get_tls_size(tls_dir: &pe_types::ImageTlsDirectory) -> usize {
