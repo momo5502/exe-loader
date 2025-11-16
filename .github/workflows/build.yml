@@ -26,8 +26,10 @@ jobs:
         include:
           - configuration: Debug
             profile: dev
+            flags: ""
           - configuration: Release
             profile: release
+            flags: "-D warnings"
           - platform: Windows x86
             runner: windows-latest
             target: i686-pc-windows-msvc
@@ -48,6 +50,8 @@ jobs:
       - name: Build
         run: |
           cargo build --profile ${{ matrix.profile }} --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.flags }}
 
       #- name: Test
       #  run: |
