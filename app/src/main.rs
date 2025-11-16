@@ -36,8 +36,8 @@ fn to_wide_string(s: &str) -> Vec<u16> {
 }
 
 pub struct Executable {
-    exe_handle: windows::Win32::Foundation::HMODULE,
-    tls_lib: windows::Win32::Foundation::HMODULE,
+    _exe_handle: windows::Win32::Foundation::HMODULE,
+    _tls_lib: windows::Win32::Foundation::HMODULE,
     entry_point: fn(),
 }
 
@@ -296,8 +296,8 @@ unsafe fn load_executable_as_library(lib: &str) -> Option<Executable> {
 
     return Some(Executable {
         entry_point: entry_point?,
-        exe_handle: pe_file,
-        tls_lib: tls_dll?,
+        _exe_handle: pe_file,
+        _tls_lib: tls_dll?,
     });
 }
 

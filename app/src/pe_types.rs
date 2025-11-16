@@ -9,8 +9,6 @@ pub mod pe_types {
     pub type ImageOptionalHeader = IMAGE_OPTIONAL_HEADER64;
     pub type ImageTlsDirectory = IMAGE_TLS_DIRECTORY64;
 
-    pub type PtrType = u64;
-
     pub const IMAGE_ORDINAL_FLAG: usize = 0x8000000000000000;
 
     fn read_gs_qword(offset: u32) -> u64 {
@@ -42,8 +40,6 @@ pub mod pe_types {
     pub type ImageNtHeaders = IMAGE_NT_HEADERS32;
     pub type ImageOptionalHeader = IMAGE_OPTIONAL_HEADER32;
     pub type ImageTlsDirectory = IMAGE_TLS_DIRECTORY32;
-
-    pub type PtrType = u32;
 
     pub const IMAGE_ORDINAL_FLAG: usize = 0x80000000;
 
