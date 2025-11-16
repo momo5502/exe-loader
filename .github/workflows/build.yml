@@ -52,3 +52,18 @@ jobs:
       #- name: Test
       #  run: |
       #    cargo test --profile ${{ matrix.profile }} --target ${{ matrix.target }}
+
+  summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-24.04
+    needs: [build]
+    if: always()
+    steps:
+      - uses: geekyeggo/delete-artifact@v5
+        continue-on-error: true
+        with:
+          name: "Temp *"
+
+      - name: Pipeline failed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: exit 1
