@@ -13,11 +13,6 @@ mod pe_types;
 mod pe_file;
 use pe_file::PEFile;
 
-use crate::pe_file::get_hmodule_from_handle_value;
-use crate::tls_handler::register_tls_callback;
-
-mod tls_handler;
-
 fn get_tls_data(tls_index: u32) -> *mut u8 {
     let tls_vector = pe_types::get_tls_vector();
     return unsafe { *tls_vector.add(tls_index as usize) };
@@ -286,25 +281,6 @@ unsafe fn load_executable_as_library(lib: &str) -> Option<Executable> {
     });
 }
 
-fn setup_tls_callbacks(handle: windows::Win32::Foundation::HMODULE) {
-    let handle_value = handle.get_handle_value();
-    if handle_value.is_none() {
-        return;
-    }
-
-    let value = handle_value.unwrap();
-
-    let b = Box::new(move |reason: u32| {
-        let h = unsafe { get_hmodule_from_handle_value(value) };
-        h.call_tls_callbacks(reason);
-    });
-
-    register_tls_callback(b);
-
-    const DLL_PROCESS_ATTACH: u32 = 1;
-    handle.call_tls_callbacks(DLL_PROCESS_ATTACH);
-}
-
 fn main() {
     let exe = unsafe {
         load_executable_as_library(
@@ -313,6 +289,5 @@ fn main() {
     };
 
     let bin = exe.expect("bruh");
-    //setup_tls_callbacks(bin.handle);
     (bin.entry_point)();
 }
