@@ -3,7 +3,7 @@
 
 use core::ffi::c_void;
 
-type HINSTANCE = *mut c_void;
+type HINSTANCE = *const c_void;
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 
@@ -69,7 +69,7 @@ pub static __xl_a: usize = 0;
 
 #[unsafe(link_section = ".CRT$XLZ")]
 #[unsafe(no_mangle)]
-pub static __xl_z: usize = 0;
+pub static __xl_z: [usize; 0x100] = [0; 0x100];
 
 #[unsafe(link_section = ".rdata$T")]
 #[unsafe(no_mangle)]

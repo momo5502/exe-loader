@@ -7,6 +7,19 @@ use crate::pe_types;
 
 pub trait PEFile {
     fn get_base_address(&self) -> Option<*const u8>;
+
+    fn get_handle_value(&self) -> Option<usize> {
+        let base_address = self.get_base_address();
+        if base_address.is_none() {
+            return None;
+        }
+
+        let base_value = base_address.unwrap();
+        let value: usize = unsafe { std::mem::transmute(base_value) };
+
+        return Some(value);
+    }
+
     fn get_dos_header(&self) -> Option<&IMAGE_DOS_HEADER> {
         let base_address = self.get_base_address();
         if base_address.is_none() {
@@ -85,21 +98,19 @@ pub trait PEFile {
         return Some(unsafe { &*tls_dir.unwrap() });
     }
 
-    fn call_tls_callbacks(&self, attach: bool) {
+    fn call_tls_callbacks(&self, reason: u32) -> bool {
         let base_address = self.get_base_address();
         let tls_dir = self.get_tls_dir();
 
         if base_address.is_none() || tls_dir.is_none() {
-            return;
+            return false;
         }
-
-        let reason = if attach { 2 } else { 3 };
 
         let base = base_address.unwrap();
         let callbacks = tls_dir.unwrap().AddressOfCallBacks as *const usize;
 
-        if callbacks == core::ptr::null() {
-            return;
+        if callbacks.is_null() {
+            return false;
         }
 
         let mut index = 0;
@@ -112,11 +123,13 @@ pub trait PEFile {
                 break;
             }
 
-            let tls_callback: fn(base: *const u8, reason: u8, reserved: usize) =
+            let tls_callback: fn(base: *const u8, reason: usize, reserved: usize) =
                 unsafe { std::mem::transmute(callback) };
 
-            tls_callback(base, reason, 0);
+            tls_callback(base, reason as usize, 0);
         }
+
+        return true;
     }
 }
 
@@ -128,4 +141,9 @@ impl PEFile for windows::Win32::Foundation::HMODULE {
 
         return Some(self.0 as *const u8);
     }
+}
+
+pub fn get_hmodule_from_handle_value(value: usize) -> windows::Win32::Foundation::HMODULE {
+    let handle: *mut core::ffi::c_void = unsafe { std::mem::transmute(value) };
+    return windows::Win32::Foundation::HMODULE(handle);
 }

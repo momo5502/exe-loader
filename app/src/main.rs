@@ -13,6 +13,11 @@ mod pe_types;
 mod pe_file;
 use pe_file::PEFile;
 
+use crate::pe_file::get_hmodule_from_handle_value;
+use crate::tls_handler::register_tls_callback;
+
+mod tls_handler;
+
 fn get_tls_data(tls_index: u32) -> *mut u8 {
     let tls_vector = pe_types::get_tls_vector();
     return unsafe { *tls_vector.add(tls_index as usize) };
@@ -103,7 +108,7 @@ fn load_imports_for_library<T: PEFile>(
 
 fn load_tls_dll() -> Option<windows::Win32::Foundation::HMODULE> {
     // TODO: Fix
-    return load_library("C:\\Users\\mauri\\Desktop\\exe-loader\\target\\release\\tls_lib.dll");
+    return load_library("C:\\Users\\mauri\\Desktop\\testicles\\target\\release\\tls_lib.dll");
 }
 
 fn get_tls_size(tls_dir: &pe_types::ImageTlsDirectory) -> usize {
@@ -136,6 +141,36 @@ fn load_tls<T: PEFile>(pe: &T) -> bool {
     // Not enough space, throw error?
     if main_dir_size > target_dir_size {
         return false;
+    }
+
+    if main_tls_dir.AddressOfCallBacks != 0 {
+        let mut tls_callback_count = 0;
+        let source_callbacks = main_tls_dir.AddressOfCallBacks as *const usize;
+        let target_callbacks = target_tls_dir.AddressOfCallBacks as *mut usize;
+
+        loop {
+            let current_index = tls_callback_count;
+            tls_callback_count += 1;
+
+            let callback = unsafe { *source_callbacks.add(current_index) };
+            if callback == 0 {
+                break;
+            }
+        }
+
+        unsafe {
+            let _s = ScopedProtection::new(
+                target_callbacks,
+                std::mem::size_of::<usize>() * tls_callback_count,
+                PAGE_EXECUTE_READWRITE,
+            );
+
+            std::ptr::copy(
+                source_callbacks,
+                target_callbacks,
+                std::mem::size_of::<usize>() * tls_callback_count,
+            );
+        }
     }
 
     if main_tls_dir.AddressOfIndex == 0 {
@@ -251,6 +286,25 @@ unsafe fn load_executable_as_library(lib: &str) -> Option<Executable> {
     });
 }
 
+fn setup_tls_callbacks(handle: windows::Win32::Foundation::HMODULE) {
+    let handle_value = handle.get_handle_value();
+    if handle_value.is_none() {
+        return;
+    }
+
+    let value = handle_value.unwrap();
+
+    let b = Box::new(move |reason: u32| {
+        let h = unsafe { get_hmodule_from_handle_value(value) };
+        h.call_tls_callbacks(reason);
+    });
+
+    register_tls_callback(b);
+
+    const DLL_PROCESS_ATTACH: u32 = 1;
+    handle.call_tls_callbacks(DLL_PROCESS_ATTACH);
+}
+
 fn main() {
     let exe = unsafe {
         load_executable_as_library(
@@ -259,16 +313,6 @@ fn main() {
     };
 
     let bin = exe.expect("bruh");
-
-    println!("Spawning thread...");
-
-    let computation = std::thread::spawn(|| {
-        println!("Hello from thread!");
-    });
-
-    let _ = computation.join();
-
-    bin.handle.call_tls_callbacks(true);
-
+    //setup_tls_callbacks(bin.handle);
     (bin.entry_point)();
 }
