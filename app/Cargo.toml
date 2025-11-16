@@ -6,7 +6,7 @@ version = "0.1.0"
 [dependencies]
 tempfile = "3.23.0"
 tls_lib = {path = "../tls-lib"}
-windows = {version = "0.60", features = [
+windows = {version = "0.62", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_Diagnostics_Debug",
   "Win32_System_SystemServices",
