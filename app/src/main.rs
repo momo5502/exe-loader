@@ -13,6 +13,10 @@ mod pe_types;
 mod pe_file;
 use pe_file::PEFile;
 
+use crate::tls_lib::create_tls_lib;
+
+mod tls_lib;
+
 fn get_tls_data(tls_index: u32) -> *mut u8 {
     let tls_vector = pe_types::get_tls_vector();
     return unsafe { *tls_vector.add(tls_index as usize) };
@@ -30,7 +34,7 @@ fn to_wide_string(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-struct Executable {
+pub struct Executable {
     handle: windows::Win32::Foundation::HMODULE,
     entry_point: fn(),
 }
@@ -102,8 +106,8 @@ fn load_imports_for_library<T: PEFile>(
 }
 
 fn load_tls_dll() -> Option<windows::Win32::Foundation::HMODULE> {
-    // TODO: Fix
-    return load_library("C:\\Users\\mauri\\Desktop\\testicles\\target\\release\\tls_lib.dll");
+    let tls_lib = create_tls_lib();
+    return load_library(tls_lib.to_str()?);
 }
 
 fn get_tls_size(tls_dir: &pe_types::ImageTlsDirectory) -> usize {

@@ -44,6 +44,7 @@ pub struct ImageTlsDirectory {
 unsafe impl Sync for ImageTlsDirectory {}
 
 const TLS_BUFFER_SIZE: usize = 256 * 0x1000;
+const TLS_CALLBACK_SIZE: usize = 0x100;
 
 #[unsafe(link_section = ".tls$BBB")]
 #[unsafe(no_mangle)]
@@ -69,7 +70,7 @@ pub static __xl_a: usize = 0;
 
 #[unsafe(link_section = ".CRT$XLZ")]
 #[unsafe(no_mangle)]
-pub static __xl_z: [usize; 0x100] = [0; 0x100];
+pub static __xl_z: [usize; TLS_CALLBACK_SIZE] = [0; TLS_CALLBACK_SIZE];
 
 #[unsafe(link_section = ".rdata$T")]
 #[unsafe(no_mangle)]

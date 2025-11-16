@@ -4,6 +4,7 @@ name = "exe-loader"
 version = "0.1.0"
 
 [dependencies]
+tempfile = "3.23.0"
 tls_lib = {path = "../tls-lib"}
 windows = {version = "0.60", features = [
   "Win32_System_LibraryLoader",
