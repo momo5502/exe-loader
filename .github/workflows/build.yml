@@ -1,0 +1,54 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - Windows x86
+          - Windows x86_64
+        configuration:
+          - Debug
+          - Release
+        include:
+          - configuration: Debug
+            profile: dev
+          - configuration: Release
+            profile: release
+          - platform: Windows x86
+            runner: windows-latest
+            target: i686-pc-windows-msvc
+          - platform: Windows x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          cargo build --profile ${{ matrix.profile }} --target ${{ matrix.target }}
+
+      #- name: Test
+      #  run: |
+      #    cargo test --profile ${{ matrix.profile }} --target ${{ matrix.target }}
