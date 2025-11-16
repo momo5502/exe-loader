@@ -1,3 +1,4 @@
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::Diagnostics::Debug::IMAGE_DIRECTORY_ENTRY_IMPORT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA, LoadLibraryW};
 use windows::Win32::System::Memory::PAGE_EXECUTE_READWRITE;
@@ -35,8 +36,17 @@ fn to_wide_string(s: &str) -> Vec<u16> {
 }
 
 pub struct Executable {
-    handle: windows::Win32::Foundation::HMODULE,
+    exe_handle: windows::Win32::Foundation::HMODULE,
+    tls_lib: windows::Win32::Foundation::HMODULE,
     entry_point: fn(),
+}
+
+impl Executable {
+    fn execute_entry_point(&self) {
+        (self.entry_point)();
+    }
+
+    // TODO: Implement unloading
 }
 
 fn load_library(lib: &str) -> Option<windows::Win32::Foundation::HMODULE> {
@@ -114,21 +124,21 @@ fn get_tls_size(tls_dir: &pe_types::ImageTlsDirectory) -> usize {
     return (tls_dir.EndAddressOfRawData - tls_dir.StartAddressOfRawData) as usize;
 }
 
-fn load_tls<T: PEFile>(pe: &T) -> bool {
+fn load_tls<T: PEFile>(pe: &T) -> Option<windows::Win32::Foundation::HMODULE> {
     let tls_dir = pe.get_tls_dir();
     if tls_dir.is_none() {
-        return true;
+        return Some(HMODULE(std::ptr::null_mut()));
     }
 
     let tls_dll = load_tls_dll();
     if tls_dll.is_none() {
-        return false;
+        return None;
     }
 
     let dll = tls_dll.unwrap();
     let dll_tls_dir = dll.get_tls_dir();
     if dll_tls_dir.is_none() {
-        return false;
+        return None;
     }
 
     let main_tls_dir = tls_dir.unwrap();
@@ -139,7 +149,7 @@ fn load_tls<T: PEFile>(pe: &T) -> bool {
 
     // Not enough space, throw error?
     if main_dir_size > target_dir_size {
-        return false;
+        return None;
     }
 
     if main_tls_dir.AddressOfCallBacks != 0 {
@@ -173,7 +183,7 @@ fn load_tls<T: PEFile>(pe: &T) -> bool {
     }
 
     if main_tls_dir.AddressOfIndex == 0 {
-        return true;
+        return Some(dll);
     }
 
     let tls_index;
@@ -194,7 +204,7 @@ fn load_tls<T: PEFile>(pe: &T) -> bool {
     let target_tls_data = target_tls_dir.StartAddressOfRawData as *mut u8;
 
     if main_tls_dir.StartAddressOfRawData == 0 {
-        return true;
+        return Some(dll);
     }
 
     let current_thread_data = get_tls_data(tls_index);
@@ -205,7 +215,7 @@ fn load_tls<T: PEFile>(pe: &T) -> bool {
         std::ptr::copy(main_tls_data, current_thread_data, main_dir_size);
     }
 
-    return true;
+    return Some(dll);
 }
 
 fn load_imports<T: PEFile>(pe: &T) -> bool {
@@ -275,13 +285,19 @@ unsafe fn load_executable_as_library(lib: &str) -> Option<Executable> {
         return None;
     }
 
-    if !load_imports(&pe_file) || !load_tls(&pe_file) {
+    if !load_imports(&pe_file) {
+        return None;
+    }
+
+    let tls_dll = load_tls(&pe_file);
+    if tls_dll.is_none() {
         return None;
     }
 
     return Some(Executable {
-        entry_point: entry_point.unwrap(),
-        handle: pe_file,
+        entry_point: entry_point?,
+        exe_handle: pe_file,
+        tls_lib: tls_dll?,
     });
 }
 
@@ -293,5 +309,5 @@ fn main() {
     };
 
     let bin = exe.expect("bruh");
-    (bin.entry_point)();
+    bin.execute_entry_point();
 }
